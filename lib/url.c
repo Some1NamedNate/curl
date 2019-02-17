@@ -292,7 +292,7 @@ void Curl_freeset(struct Curl_easy *data)
 }
 
 /* free the URL pieces */
-void Curl_up_free(struct Curl_easy *data)
+static void up_free(struct Curl_easy *data)
 {
   struct urlpieces *up = &data->state.up;
   Curl_safefree(up->scheme);
@@ -369,7 +369,7 @@ CURLcode Curl_close(struct Curl_easy *data)
   }
   data->change.referer = NULL;
 
-  Curl_up_free(data);
+  up_free(data);
   Curl_safefree(data->state.buffer);
   Curl_safefree(data->state.headerbuff);
   Curl_safefree(data->state.ulbuf);
@@ -492,9 +492,9 @@ CURLcode Curl_init_userdefined(struct Curl_easy *data)
 
   /* Set the default CA cert bundle/path detected/specified at build time.
    *
-   * If Schannel (WinSSL) is the selected SSL backend then these locations
-   * are ignored. We allow setting CA location for schannel only when
-   * explicitly specified by the user via CURLOPT_CAINFO / --cacert.
+   * If Schannel is the selected SSL backend then these locations are
+   * ignored. We allow setting CA location for schannel only when explicitly
+   * specified by the user via CURLOPT_CAINFO / --cacert.
    */
   if(Curl_ssl_backend() != CURLSSLBACKEND_SCHANNEL) {
 #if defined(CURL_CA_BUNDLE)
@@ -788,18 +788,17 @@ CURLcode Curl_disconnect(struct Curl_easy *data,
     /* This is set if protocol-specific cleanups should be made */
     conn->handler->disconnect(conn, dead_connection);
 
-    /* unlink ourselves! */
   infof(data, "Closing connection %ld\n", conn->connection_id);
+  Curl_ssl_close(conn, FIRSTSOCKET);
+  Curl_ssl_close(conn, SECONDARYSOCKET);
+
+  /* unlink ourselves! */
   Curl_conncache_remove_conn(data, conn, TRUE);
 
   free_idnconverted_hostname(&conn->host);
   free_idnconverted_hostname(&conn->conn_to_host);
   free_idnconverted_hostname(&conn->http_proxy.host);
   free_idnconverted_hostname(&conn->socks_proxy.host);
-
-  /* this assumes that the pointer is still there after the connection was
-     detected from the cache */
-  Curl_ssl_close(conn, FIRSTSOCKET);
 
   conn_free(conn);
   return CURLE_OK;
@@ -965,9 +964,10 @@ static bool extract_if_dead(struct connectdata *conn,
       /* The protocol has a special method for checking the state of the
          connection. Use it to check if the connection is dead. */
       unsigned int state;
-      conn->data = data; /* temporary transfer for this connection to use */
+      struct Curl_easy *olddata = conn->data;
+      conn->data = data; /* use this transfer for now */
       state = conn->handler->connection_check(conn, CONNCHECK_ISDEAD);
-      conn->data = NULL; /* clear transfer again */
+      conn->data = olddata;
       dead = (state & CONNRESULT_DEAD);
     }
     else {
@@ -1686,6 +1686,8 @@ static bool is_ASCII_name(const char *hostname)
 static void strip_trailing_dot(struct hostname *host)
 {
   size_t len;
+  if(!host || !host->name)
+    return;
   len = strlen(host->name);
   if(len && (host->name[len-1] == '.'))
     host->name[len-1] = 0;
@@ -1749,15 +1751,6 @@ static CURLcode idnconvert_hostname(struct connectdata *conn,
 #else
     infof(data, "IDN support not present, can't parse Unicode domains\n");
 #endif
-  }
-  {
-    char *hostp;
-    for(hostp = host->name; *hostp; hostp++) {
-      if(*hostp <= 32) {
-        failf(data, "Host name '%s' contains bad letter", host->name);
-        return CURLE_URL_MALFORMAT;
-      }
-    }
   }
   return CURLE_OK;
 }
@@ -2030,7 +2023,7 @@ static CURLcode parseurlandfillconn(struct Curl_easy *data,
   CURLUcode uc;
   char *hostname;
 
-  Curl_up_free(data); /* cleanup previous leftovers first */
+  up_free(data); /* cleanup previous leftovers first */
 
   /* parse the URL */
   if(data->set.uh) {

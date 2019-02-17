@@ -10,19 +10,6 @@ QUIC
 
  See the [QUIC wiki page](https://github.com/curl/curl/wiki/QUIC).
 
-HTTP cookies
-------------
-
-Two cookie drafts have been adopted by the httpwg in IETF and we should
-support them as the popular browsers will as well:
-
-[Deprecate modification of 'secure' cookies from non-secure
-origins](https://tools.ietf.org/html/draft-ietf-httpbis-cookie-alone-00)
-
-[Cookie Prefixes](https://tools.ietf.org/html/draft-ietf-httpbis-cookie-prefixes-00)
-
-[Firefox bug report about secure cookies](https://bugzilla.mozilla.org/show_bug.cgi?id=976073)
-
 SRV records
 -----------
 

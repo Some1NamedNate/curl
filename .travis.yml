@@ -119,6 +119,9 @@ matrix:
         - os: osx
           compiler: clang
           env: T=normal
+        - os: osx
+          compiler: clang
+          env: T=cmake
         - os: linux
           compiler: gcc
           dist: trusty
@@ -143,6 +146,10 @@ matrix:
           compiler: clang
           dist: trusty
           env: T=tidy
+        - os: linux
+          compiler: clang
+          dist: trusty
+          env: T=scan-build
         - os: linux
           compiler: clang
           dist: trusty
@@ -342,15 +349,16 @@ script:
              source .travis-iconv-env.sh
              ./configure --enable-debug --enable-werror $C
              make && make examples
-             make TFLAGS=-n test-nonflaky
+             make test-nonflaky
         fi
     - |
         set -eo pipefail
         if [ "$T" = "cmake" ]; then
-             mkdir build
-             cd build
-             cmake .. -DCURL_WERROR=ON
-             make
+             if [ $TRAVIS_OS_NAME = linux ]; then
+                cmake -H. -Bbuild -DCURL_WERROR=ON && cmake --build build
+             else
+                cmake -H. -Bbuild -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl -DCURL_DISABLE_LDAP=ON -DCURL_DISABLE_LDAPS=ON && cmake --build build
+             fi
         fi
     - |
         set -eo pipefail
@@ -399,6 +407,11 @@ script:
           pushd /tmp/curl_fuzzer
           ./mainline.sh ${CURLSRC}
           popd
+        fi
+    - |
+        if [ "$T" = "scan-build" ]; then
+             scan-build ./configure --enable-debug --enable-werror $C
+             scan-build --status-bugs make && scan-build --status-bugs make examples
         fi
 
 # whitelist branches to avoid testing feature branches twice (as branch and as pull request)

@@ -31,7 +31,7 @@ XC_OVR_ZZ60
 CURL_OVERRIDE_AUTOCONF
 
 dnl configure script copyright
-AC_COPYRIGHT([Copyright (c) 1998 - 2017 Daniel Stenberg, <daniel@haxx.se>
+AC_COPYRIGHT([Copyright (c) 1998 - 2019 Daniel Stenberg, <daniel@haxx.se>
 This configure script may be copied, distributed and modified under the
 terms of the curl license; see COPYING for more details])
 
@@ -131,11 +131,8 @@ dnl figure out the libcurl version
 CURLVERSION=`$SED -ne 's/^#define LIBCURL_VERSION "\(.*\)".*/\1/p' ${srcdir}/include/curl/curlver.h`
 XC_CHECK_PROG_CC
 
-dnl Check if gcc is being used before adding AX_CODE_COVERAGE
-AS_IF([ test "$GCC" = "yes" ], [AX_CODE_COVERAGE],
-  # not using GCC so pass a test below - CODE_COVERAGE_ENABLED_TRUE is not zero length
-  CODE_COVERAGE_ENABLED_TRUE='#'
-)
+dnl for --enable-code-coverage
+CURL_COVERAGE
 
 XC_AUTOMAKE
 AC_MSG_CHECKING([curl version])
@@ -1481,6 +1478,11 @@ OPT_WINSSL=no
 AC_ARG_WITH(winssl,dnl
 AC_HELP_STRING([--with-winssl],[enable Windows native SSL/TLS])
 AC_HELP_STRING([--without-winssl], [disable Windows native SSL/TLS]),
+  OPT_WINSSL=$withval)
+
+AC_ARG_WITH(schannel,dnl
+AC_HELP_STRING([--with-schannel],[enable Windows native SSL/TLS])
+AC_HELP_STRING([--without-schannel], [disable Windows native SSL/TLS]),
   OPT_WINSSL=$withval)
 
 AC_MSG_CHECKING([whether to enable Windows native SSL/TLS (Windows native builds only)])
@@ -4314,6 +4316,7 @@ AC_MSG_NOTICE([Configured to build curl/libcurl:
   Built-in manual:  ${curl_manual_msg}
   --libcurl option: ${curl_libcurl_msg}
   Verbose errors:   ${curl_verbose_msg}
+  Code coverage:    ${curl_coverage_msg}
   SSPI support:     ${curl_sspi_msg}
   ca cert bundle:   ${ca}${ca_warning}
   ca cert path:     ${capath}${capath_warning}
@@ -4326,4 +4329,5 @@ AC_MSG_NOTICE([Configured to build curl/libcurl:
   PSL support:      ${curl_psl_msg}
   HTTP2 support:    ${curl_h2_msg}
   Protocols:        ${SUPPORT_PROTOCOLS}
+  Features:         ${SUPPORT_FEATURES}
 ])
