@@ -114,41 +114,7 @@
  * CURLRES_* defines based on the config*.h and curl_setup.h defines.
  */
 
-/* These two symbols are for the global DNS cache */
-static struct curl_hash hostname_cache;
-static int host_cache_initialized;
-
 static void freednsentry(void *freethis);
-
-/*
- * Curl_global_host_cache_init() initializes and sets up a global DNS cache.
- * Global DNS cache is general badness. Do not use. This will be removed in
- * a future version. Use the share interface instead!
- *
- * Returns a struct curl_hash pointer on success, NULL on failure.
- */
-struct curl_hash *Curl_global_host_cache_init(void)
-{
-  int rc = 0;
-  if(!host_cache_initialized) {
-    rc = Curl_hash_init(&hostname_cache, 7, Curl_hash_str,
-                        Curl_str_key_compare, freednsentry);
-    if(!rc)
-      host_cache_initialized = 1;
-  }
-  return rc?NULL:&hostname_cache;
-}
-
-/*
- * Destroy and cleanup the global DNS cache
- */
-void Curl_global_host_cache_dtor(void)
-{
-  if(host_cache_initialized) {
-    Curl_hash_destroy(&hostname_cache);
-    host_cache_initialized = 0;
-  }
-}
 
 /*
  * Return # of addresses in a Curl_addrinfo struct
@@ -516,6 +482,7 @@ Curl_cache_addr(struct Curl_easy *data,
 int Curl_resolv(struct connectdata *conn,
                 const char *hostname,
                 int port,
+                bool allowDOH,
                 struct Curl_dns_entry **entry)
 {
   struct Curl_dns_entry *dns = NULL;
@@ -561,7 +528,7 @@ int Curl_resolv(struct connectdata *conn,
         return CURLRESOLV_ERROR;
     }
 
-    if(data->set.doh) {
+    if(allowDOH && data->set.doh) {
       addr = Curl_doh(conn, hostname, port, &respwait);
     }
     else {
@@ -687,7 +654,7 @@ int Curl_resolv_timeout(struct connectdata *conn,
 
   if(!timeout)
     /* USE_ALARM_TIMEOUT defined, but no timeout actually requested */
-    return Curl_resolv(conn, hostname, port, entry);
+    return Curl_resolv(conn, hostname, port, TRUE, entry);
 
   if(timeout < 1000) {
     /* The alarm() function only provides integer second resolution, so if
@@ -749,7 +716,7 @@ int Curl_resolv_timeout(struct connectdata *conn,
   /* Perform the actual name resolution. This might be interrupted by an
    * alarm if it takes too long.
    */
-  rc = Curl_resolv(conn, hostname, port, entry);
+  rc = Curl_resolv(conn, hostname, port, TRUE, entry);
 
 #ifdef USE_ALARM_TIMEOUT
 clean_up:

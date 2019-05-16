@@ -46,6 +46,7 @@ struct OperationConfig {
   char *cookie;             /* single line with specified cookies */
   char *cookiejar;          /* write to this file */
   char *cookiefile;         /* read from this file */
+  char *altsvc;             /* alt-svc cache file name */
   bool cookiesession;       /* new session? */
   bool encoding;            /* Accept-Encoding please */
   bool tr_encoding;         /* Transfer-Encoding please */
@@ -178,8 +179,9 @@ struct OperationConfig {
   curl_off_t condtime;
   struct curl_slist *headers;
   struct curl_slist *proxyheaders;
-  tool_mime *mimepost;
+  tool_mime *mimeroot;
   tool_mime *mimecurrent;
+  curl_mime *mimepost;
   struct curl_slist *telnet_options;
   struct curl_slist *resolve;
   struct curl_slist *connect_to;

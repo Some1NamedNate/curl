@@ -310,11 +310,12 @@
 #endif
 
 #ifdef __AMIGA__
-#  ifndef __ixemul__
-#    include <exec/types.h>
-#    include <exec/execbase.h>
-#    include <proto/exec.h>
-#    include <proto/dos.h>
+#  include <exec/types.h>
+#  include <exec/execbase.h>
+#  include <proto/exec.h>
+#  include <proto/dos.h>
+#  ifdef HAVE_PROTO_BSDSOCKET_H
+#    include <proto/bsdsocket.h> /* ensure bsdsocket.library use */
 #    define select(a,b,c,d,e) WaitSelect(a,b,c,d,e,0)
 #  endif
 #endif
@@ -648,7 +649,7 @@ int netware_init(void);
 #if defined(USE_GNUTLS) || defined(USE_OPENSSL) || defined(USE_NSS) || \
     defined(USE_POLARSSL) || defined(USE_MBEDTLS) || \
     defined(USE_CYASSL) || defined(USE_SCHANNEL) || \
-    defined(USE_DARWINSSL) || defined(USE_GSKIT) || defined(USE_MESALINK)
+    defined(USE_SECTRANSP) || defined(USE_GSKIT) || defined(USE_MESALINK)
 #define USE_SSL    /* SSL support has been enabled */
 #endif
 
@@ -667,7 +668,7 @@ int netware_init(void);
 /* Single point where USE_NTLM definition might be defined */
 #if !defined(CURL_DISABLE_NTLM) && !defined(CURL_DISABLE_CRYPTO_AUTH)
 #if defined(USE_OPENSSL) || defined(USE_WINDOWS_SSPI) || \
-    defined(USE_GNUTLS) || defined(USE_NSS) || defined(USE_DARWINSSL) || \
+    defined(USE_GNUTLS) || defined(USE_NSS) || defined(USE_SECTRANSP) || \
     defined(USE_OS400CRYPTO) || defined(USE_WIN32_CRYPTO) || \
     defined(USE_MBEDTLS)
 
@@ -683,6 +684,10 @@ int netware_init(void);
 
 #ifdef CURL_WANTS_CA_BUNDLE_ENV
 #error "No longer supported. Set CURLOPT_CAINFO at runtime instead."
+#endif
+
+#if defined(USE_LIBSSH2) || defined(USE_LIBSSH) || defined(USE_WOLFSSH)
+#define USE_SSH
 #endif
 
 /*

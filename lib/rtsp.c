@@ -42,16 +42,6 @@
 #include "curl_memory.h"
 #include "memdebug.h"
 
-/*
- * TODO (general)
- *  -incoming server requests
- *      -server CSeq counter
- *  -digest authentication
- *  -connect through proxy
- *  -pipelining?
- */
-
-
 #define RTP_PKT_CHANNEL(p)   ((int)((unsigned char)((p)[1])))
 
 #define RTP_PKT_LENGTH(p)  ((((int)((unsigned char)((p)[2]))) << 8) | \
@@ -236,7 +226,6 @@ static CURLcode rtsp_done(struct connectdata *conn,
     if(data->set.rtspreq == RTSPREQ_RECEIVE &&
             (conn->proto.rtspc.rtp_channel == -1)) {
       infof(data, "Got an RTP Receive with a CSeq of %ld\n", CSeq_recv);
-      /* TODO CPC: Server -> Client logic here */
     }
   }
 
@@ -249,7 +238,6 @@ static CURLcode rtsp_do(struct connectdata *conn, bool *done)
   CURLcode result = CURLE_OK;
   Curl_RtspReq rtspreq = data->set.rtspreq;
   struct RTSP *rtsp = data->req.protop;
-  struct HTTP *http;
   Curl_send_buffer *req_buffer;
   curl_off_t postsize = 0; /* for ANNOUNCE and SET_PARAMETER */
   curl_off_t putsize = 0; /* for ANNOUNCE and SET_PARAMETER */
@@ -267,10 +255,6 @@ static CURLcode rtsp_do(struct connectdata *conn, bool *done)
   const char *p_userpwd = NULL;
 
   *done = TRUE;
-
-  http = &(rtsp->http_wrapper);
-  /* Assert that no one has changed the RTSP struct in an evil way */
-  DEBUGASSERT((void *)http == (void *)rtsp);
 
   rtsp->CSeq_sent = data->state.rtsp_next_client_CSeq;
   rtsp->CSeq_recv = 0;
@@ -328,8 +312,7 @@ static CURLcode rtsp_do(struct connectdata *conn, bool *done)
   }
 
   if(rtspreq == RTSPREQ_RECEIVE) {
-    Curl_setup_transfer(conn, FIRSTSOCKET, -1, TRUE,
-                        &http->readbytecount, -1, NULL);
+    Curl_setup_transfer(data, FIRSTSOCKET, -1, TRUE, -1);
 
     return result;
   }
@@ -341,8 +324,6 @@ static CURLcode rtsp_do(struct connectdata *conn, bool *done)
           p_request);
     return CURLE_BAD_FUNCTION_ARGUMENT;
   }
-
-  /* TODO: proxy? */
 
   /* Stream URI. Default to server '*' if not specified */
   if(data->set.str[STRING_RTSP_STREAM_URI]) {
@@ -597,17 +578,15 @@ static CURLcode rtsp_do(struct connectdata *conn, bool *done)
     return result;
   }
 
-  Curl_setup_transfer(conn, FIRSTSOCKET, -1, TRUE, &http->readbytecount,
-                      putsize?FIRSTSOCKET:-1,
-                      putsize?&http->writebytecount:NULL);
+  Curl_setup_transfer(data, FIRSTSOCKET, -1, TRUE, putsize?FIRSTSOCKET:-1);
 
   /* Increment the CSeq on success */
   data->state.rtsp_next_client_CSeq++;
 
-  if(http->writebytecount) {
+  if(data->req.writebytecount) {
     /* if a request-body has been sent off, we make sure this progress is
        noted properly */
-    Curl_pgrsSetUploadCounter(data, http->writebytecount);
+    Curl_pgrsSetUploadCounter(data, data->req.writebytecount);
     if(Curl_pgrsUpdate(conn))
       result = CURLE_ABORTED_BY_CALLBACK;
   }

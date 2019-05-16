@@ -58,6 +58,7 @@
 #include "warnless.h"
 #include "x509asn1.h"
 #include "curl_printf.h"
+#include "multiif.h"
 #include "system_win32.h"
 
  /* The last #include file should be: */
@@ -324,6 +325,9 @@ get_alg_id_by_name(char *name)
 #ifdef CALG_ECDSA
   CIPHEROPTION(CALG_ECDSA);
 #endif
+#ifdef CALG_ECDH_EPHEM
+  CIPHEROPTION(CALG_ECDH_EPHEM);
+#endif
   return 0;
 }
 
@@ -519,7 +523,6 @@ schannel_connect_step1(struct connectdata *conn, int sockindex)
 #endif
         schannel_cred.dwFlags = SCH_CRED_AUTO_CRED_VALIDATION;
 
-      /* TODO s/data->set.ssl.no_revoke/SSL_SET_OPTION(no_revoke)/g */
       if(data->set.ssl.no_revoke) {
         schannel_cred.dwFlags |= SCH_CRED_IGNORE_NO_REVOCATION_CHECK |
           SCH_CRED_IGNORE_REVOCATION_OFFLINE;
@@ -684,8 +687,9 @@ schannel_connect_step1(struct connectdata *conn, int sockindex)
       CertFreeCertificateContext(client_certs[0]);
 
     if(sspi_status != SEC_E_OK) {
+      char buffer[STRERROR_LEN];
       failf(data, "schannel: AcquireCredentialsHandle failed: %s",
-            Curl_sspi_strerror(conn, sspi_status));
+            Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
       Curl_safefree(BACKEND->cred);
       switch(sspi_status) {
         case SEC_E_INSUFFICIENT_MEMORY:
@@ -800,15 +804,16 @@ schannel_connect_step1(struct connectdata *conn, int sockindex)
   Curl_unicodefree(host_name);
 
   if(sspi_status != SEC_I_CONTINUE_NEEDED) {
+    char buffer[STRERROR_LEN];
     Curl_safefree(BACKEND->ctxt);
     switch(sspi_status) {
       case SEC_E_INSUFFICIENT_MEMORY:
         failf(data, "schannel: initial InitializeSecurityContext failed: %s",
-              Curl_sspi_strerror(conn, sspi_status));
+              Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
         return CURLE_OUT_OF_MEMORY;
       case SEC_E_WRONG_PRINCIPAL:
         failf(data, "schannel: SNI or certificate check failed: %s",
-              Curl_sspi_strerror(conn, sspi_status));
+              Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
         return CURLE_PEER_FAILED_VERIFICATION;
         /*
       case SEC_E_INVALID_HANDLE:
@@ -823,7 +828,7 @@ schannel_connect_step1(struct connectdata *conn, int sockindex)
         */
       default:
         failf(data, "schannel: initial InitializeSecurityContext failed: %s",
-              Curl_sspi_strerror(conn, sspi_status));
+              Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
         return CURLE_SSL_CONNECT_ERROR;
     }
   }
@@ -1044,14 +1049,15 @@ schannel_connect_step2(struct connectdata *conn, int sockindex)
       }
     }
     else {
+      char buffer[STRERROR_LEN];
       switch(sspi_status) {
         case SEC_E_INSUFFICIENT_MEMORY:
           failf(data, "schannel: next InitializeSecurityContext failed: %s",
-                Curl_sspi_strerror(conn, sspi_status));
+                Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
           return CURLE_OUT_OF_MEMORY;
         case SEC_E_WRONG_PRINCIPAL:
           failf(data, "schannel: SNI or certificate check failed: %s",
-                Curl_sspi_strerror(conn, sspi_status));
+                Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
           return CURLE_PEER_FAILED_VERIFICATION;
           /*
         case SEC_E_INVALID_HANDLE:
@@ -1066,7 +1072,7 @@ schannel_connect_step2(struct connectdata *conn, int sockindex)
           */
         default:
           failf(data, "schannel: next InitializeSecurityContext failed: %s",
-                Curl_sspi_strerror(conn, sspi_status));
+                Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
           return CURLE_SSL_CONNECT_ERROR;
       }
     }
@@ -1263,6 +1269,8 @@ schannel_connect_step3(struct connectdata *conn, int sockindex)
     }
     else
       infof(data, "ALPN, server did not agree to a protocol\n");
+    Curl_multiuse_state(conn, conn->negnpn == CURL_HTTP_VERSION_2 ?
+                        BUNDLE_MULTIPLEX : BUNDLE_NO_MULTIUSE);
   }
 #endif
 
@@ -1848,9 +1856,10 @@ schannel_recv(struct connectdata *conn, int sockindex,
       goto cleanup;
     }
     else {
+      char buffer[STRERROR_LEN];
       *err = CURLE_RECV_ERROR;
       infof(data, "schannel: failed to read data from server: %s\n",
-            Curl_sspi_strerror(conn, sspi_status));
+            Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
       goto cleanup;
     }
   }
@@ -2000,9 +2009,11 @@ static int Curl_schannel_shutdown(struct connectdata *conn, int sockindex)
     sspi_status = s_pSecFn->ApplyControlToken(&BACKEND->ctxt->ctxt_handle,
                                               &BuffDesc);
 
-    if(sspi_status != SEC_E_OK)
+    if(sspi_status != SEC_E_OK) {
+      char buffer[STRERROR_LEN];
       failf(data, "schannel: ApplyControlToken failure: %s",
-            Curl_sspi_strerror(conn, sspi_status));
+            Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
+    }
 
     host_name = Curl_convert_UTF8_to_tchar(hostname);
     if(!host_name)
@@ -2120,7 +2131,7 @@ static CURLcode Curl_schannel_random(struct Curl_easy *data UNUSED_PARAM,
 static CURLcode pkp_pin_peer_pubkey(struct connectdata *conn, int sockindex,
                                     const char *pinnedpubkey)
 {
-  SECURITY_STATUS status;
+  SECURITY_STATUS sspi_status;
   struct Curl_easy *data = conn->data;
   struct ssl_connect_data *connssl = &conn->ssl[sockindex];
   CERT_CONTEXT *pCertContextServer = NULL;
@@ -2137,13 +2148,15 @@ static CURLcode pkp_pin_peer_pubkey(struct connectdata *conn, int sockindex,
     return CURLE_OK;
 
   do {
-    status = s_pSecFn->QueryContextAttributes(&BACKEND->ctxt->ctxt_handle,
-                                              SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-                                              &pCertContextServer);
+    sspi_status =
+      s_pSecFn->QueryContextAttributes(&BACKEND->ctxt->ctxt_handle,
+                                       SECPKG_ATTR_REMOTE_CERT_CONTEXT,
+                                       &pCertContextServer);
 
-    if((status != SEC_E_OK) || (pCertContextServer == NULL)) {
+    if((sspi_status != SEC_E_OK) || (pCertContextServer == NULL)) {
+      char buffer[STRERROR_LEN];
       failf(data, "schannel: Failed to read remote certificate context: %s",
-            Curl_sspi_strerror(conn, status));
+            Curl_sspi_strerror(sspi_status, buffer, sizeof(buffer)));
       break; /* failed */
     }
 

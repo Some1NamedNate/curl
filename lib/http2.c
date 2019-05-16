@@ -111,8 +111,6 @@ static int http2_perform_getsock(const struct connectdata *conn,
   int bitmap = GETSOCK_BLANK;
   (void)numsocks;
 
-  /* TODO We should check underlying socket state if it is SSL socket
-     because of renegotiation. */
   sock[0] = conn->sock[FIRSTSOCKET];
 
   /* in a HTTP/2 connection we can basically always get a frame so we should
@@ -620,7 +618,7 @@ static int push_promise(struct Curl_easy *data,
 
 /*
  * multi_connchanged() is called to tell that there is a connection in
- * this multi handle that has changed state (pipelining become possible, the
+ * this multi handle that has changed state (multiplexing become possible, the
  * number of allowed streams changed or similar), and a subsequent use of this
  * multi handle should move CONNECT_PEND handles back to CONNECT to have them
  * retry.
@@ -968,6 +966,28 @@ static int on_header(nghttp2_session *session, const nghttp2_frame *frame,
      PUSH_PROMISE callback comes */
   if(frame->hd.type == NGHTTP2_PUSH_PROMISE) {
     char *h;
+
+    if(!strcmp(":authority", (const char *)name)) {
+      /* pseudo headers are lower case */
+      int rc = 0;
+      char *check = aprintf("%s:%d", conn->host.name, conn->remote_port);
+      if(!check)
+        /* no memory */
+        return NGHTTP2_ERR_CALLBACK_FAILURE;
+      if(!Curl_strcasecompare(check, (const char *)value)) {
+        /* This is push is not for the same authority that was asked for in
+         * the URL. RFC 7540 section 8.2 says: "A client MUST treat a
+         * PUSH_PROMISE for which the server is not authoritative as a stream
+         * error of type PROTOCOL_ERROR."
+         */
+        (void)nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE,
+                                        stream_id, NGHTTP2_PROTOCOL_ERROR);
+        rc = NGHTTP2_ERR_CALLBACK_FAILURE;
+      }
+      free(check);
+      if(rc)
+        return rc;
+    }
 
     if(!stream->push_headers) {
       stream->push_headers_alloc = 10;
@@ -1825,9 +1845,9 @@ static ssize_t http2_send(struct connectdata *conn, int sockindex,
                           const void *mem, size_t len, CURLcode *err)
 {
   /*
-   * BIG TODO: Currently, we send request in this function, but this
-   * function is also used to send request body. It would be nice to
-   * add dedicated function for request.
+   * Currently, we send request in this function, but this function is also
+   * used to send request body. It would be nice to add dedicated function for
+   * request.
    */
   int rv;
   struct http_conn *httpc = &conn->proto.httpc;
