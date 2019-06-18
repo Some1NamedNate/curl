@@ -332,7 +332,7 @@ matrix:
                       - libpsl-dev
         - os: linux
           compiler: clang
-          dist: trusty
+          dist: xenial
           env:
               - T=scan-build
               - OVERRIDE_CC="CC=clang-7" OVERRIDE_CXX="CXX=clang++-7"
@@ -340,10 +340,11 @@ matrix:
               apt:
                   sources:
                       - *common_sources
-                      - llvm-toolchain-trusty-7
+                      - llvm-toolchain-xenial-7
                   packages:
                       - *common_packages
                       - clang-7
+                      - libpsl-dev
         - os: linux
           compiler: clang
           dist: xenial
