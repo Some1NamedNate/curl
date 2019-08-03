@@ -25,11 +25,6 @@
  * but vtls.c should ever call or use these functions.
  */
 
-/*
- * The original SSLeay-using code for curl was written by Linas Vepstas and
- * Sampo Kellomaki 1998.
- */
-
 #include "curl_setup.h"
 
 #ifdef USE_OPENSSL
@@ -75,7 +70,7 @@
 #endif
 
 #if (OPENSSL_VERSION_NUMBER >= 0x0090700fL) && /* 0.9.7 or later */     \
-  !defined(OPENSSL_NO_ENGINE)
+  !defined(OPENSSL_NO_ENGINE) && !defined(OPENSSL_NO_UI_CONSOLE)
 #define USE_OPENSSL_ENGINE
 #include <openssl/engine.h>
 #endif
@@ -154,6 +149,10 @@
     !(defined(LIBRESSL_VERSION_NUMBER) && \
       LIBRESSL_VERSION_NUMBER < 0x20700000L)
 #define HAVE_X509_GET0_SIGNATURE 1
+#endif
+
+#if (OPENSSL_VERSION_NUMBER >= 0x1000200fL) /* 1.0.2 or later */
+#define HAVE_SSL_GET_SHUTDOWN 1
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= 0x10002003L && \
@@ -1561,11 +1560,10 @@ static CURLcode verifyhost(struct connectdata *conn, X509 *server_cert)
              assumed that the data returned by ASN1_STRING_data() is null
              terminated or does not contain embedded nulls." But also that
              "The actual format of the data will depend on the actual string
-             type itself: for example for and IA5String the data will be ASCII"
+             type itself: for example for an IA5String the data will be ASCII"
 
-             Gisle researched the OpenSSL sources:
-             "I checked the 0.9.6 and 0.9.8 sources before my patch and
-             it always 0-terminates an IA5String."
+             It has been however verified that in 0.9.6 and 0.9.7, IA5String
+             is always zero-terminated.
           */
           if((altlen == strlen(altptr)) &&
              /* if this isn't true, there was an embedded zero in the name
@@ -1629,8 +1627,7 @@ static CURLcode verifyhost(struct connectdata *conn, X509 *server_cert)
       /* In OpenSSL 0.9.7d and earlier, ASN1_STRING_to_UTF8 fails if the input
          is already UTF-8 encoded. We check for this case and copy the raw
          string manually to avoid the problem. This code can be made
-         conditional in the future when OpenSSL has been fixed. Work-around
-         brought by Alexis S. L. Carvalho. */
+         conditional in the future when OpenSSL has been fixed. */
       if(tmp) {
         if(ASN1_STRING_type(tmp) == V_ASN1_UTF8STRING) {
           j = ASN1_STRING_length(tmp);
@@ -2650,11 +2647,11 @@ static CURLcode ossl_connect_step1(struct connectdata *conn, int sockindex)
   }
 
   /* Try building a chain using issuers in the trusted store first to avoid
-  problems with server-sent legacy intermediates.
-  Newer versions of OpenSSL do alternate chain checking by default which
-  gives us the same fix without as much of a performance hit (slight), so we
-  prefer that if available.
-  https://rt.openssl.org/Ticket/Display.html?id=3621&user=guest&pass=guest
+     problems with server-sent legacy intermediates.  Newer versions of
+     OpenSSL do alternate chain checking by default which gives us the same
+     fix without as much of a performance hit (slight), so we prefer that if
+     available.
+     https://rt.openssl.org/Ticket/Display.html?id=3621&user=guest&pass=guest
   */
 #if defined(X509_V_FLAG_TRUSTED_FIRST) && !defined(X509_V_FLAG_NO_ALT_CHAINS)
   if(verifypeer) {
@@ -3085,18 +3082,25 @@ static CURLcode get_cert_chain(struct connectdata *conn,
 
 #if defined(HAVE_X509_GET0_SIGNATURE) && defined(HAVE_X509_GET0_EXTENSIONS)
     {
-      const X509_ALGOR *palg = NULL;
-      ASN1_STRING *a = ASN1_STRING_new();
-      if(a) {
-        X509_get0_signature(&psig, &palg, x);
-        X509_signature_print(mem, ARG2_X509_signature_print palg, a);
-        ASN1_STRING_free(a);
+      const X509_ALGOR *sigalg = NULL;
+      X509_PUBKEY *xpubkey = NULL;
+      ASN1_OBJECT *pubkeyoid = NULL;
 
-        if(palg) {
-          i2a_ASN1_OBJECT(mem, palg->algorithm);
+      X509_get0_signature(&psig, &sigalg, x);
+      if(sigalg) {
+        i2a_ASN1_OBJECT(mem, sigalg->algorithm);
+        push_certinfo("Signature Algorithm", i);
+      }
+
+      xpubkey = X509_get_X509_PUBKEY(x);
+      if(xpubkey) {
+        X509_PUBKEY_get0_param(&pubkeyoid, NULL, NULL, NULL, xpubkey);
+        if(pubkeyoid) {
+          i2a_ASN1_OBJECT(mem, pubkeyoid);
           push_certinfo("Public Key Algorithm", i);
         }
       }
+
       X509V3_ext(data, i, X509_get0_extensions(x));
     }
 #else
@@ -3148,7 +3152,7 @@ static CURLcode get_cert_chain(struct connectdata *conn,
           const BIGNUM *e;
 
           RSA_get0_key(rsa, &n, &e, NULL);
-          BN_print(mem, n);
+          BIO_printf(mem, "%d", BN_num_bits(n));
           push_certinfo("RSA Public Key", i);
           print_pubkey_BN(rsa, n, i);
           print_pubkey_BN(rsa, e, i);
@@ -3273,7 +3277,6 @@ static CURLcode pkp_pin_peer_pubkey(struct Curl_easy *data, X509* cert,
     if(len1 < 1)
       break; /* failed */
 
-    /* https://www.openssl.org/docs/crypto/buffer.html */
     buff1 = temp = malloc(len1);
     if(!buff1)
       break; /* failed */
@@ -3295,7 +3298,6 @@ static CURLcode pkp_pin_peer_pubkey(struct Curl_easy *data, X509* cert,
     result = Curl_pin_peer_pubkey(data, pinnedpubkey, buff1, len1);
   } while(0);
 
-  /* https://www.openssl.org/docs/crypto/buffer.html */
   if(buff1)
     free(buff1);
 

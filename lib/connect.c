@@ -75,6 +75,7 @@
 #include "conncache.h"
 #include "multihandle.h"
 #include "system_win32.h"
+#include "quic.h"
 
 /* The last 3 #include files should be in this order */
 #include "curl_printf.h"
@@ -683,8 +684,8 @@ UNITTEST bool getaddressinfo(struct sockaddr *sa, char *addr,
    connection */
 void Curl_updateconninfo(struct connectdata *conn, curl_socket_t sockfd)
 {
-  if(conn->socktype == SOCK_DGRAM)
-    /* there's no connection! */
+  if(conn->transport != TRNSPRT_TCP)
+    /* there's no TCP connection! */
     return;
 
 #if defined(HAVE_GETPEERNAME) || defined(HAVE_GETSOCKNAME)
@@ -794,8 +795,8 @@ CURLcode Curl_is_connected(struct connectdata *conn,
     if(rc == 0) { /* no connection yet */
       error = 0;
       if(Curl_timediff(now, conn->connecttime) >= conn->timeoutms_per_addr) {
-        infof(data, "After %ldms connect time, move on!\n",
-              conn->timeoutms_per_addr);
+        infof(data, "After %" CURL_FORMAT_TIMEDIFF_T
+              "ms connect time, move on!\n", conn->timeoutms_per_addr);
         error = ETIMEDOUT;
       }
 
@@ -861,11 +862,11 @@ CURLcode Curl_is_connected(struct connectdata *conn,
               Curl_strerror(error, buffer, sizeof(buffer)));
 
         conn->timeoutms_per_addr = conn->tempaddr[i]->ai_next == NULL ?
-                                   allow : allow / 2;
+          allow : allow / 2;
 
         status = trynextip(conn, sockindex, i);
-        if(status != CURLE_COULDNT_CONNECT
-            || conn->tempsock[other] == CURL_SOCKET_BAD)
+        if((status != CURLE_COULDNT_CONNECT) ||
+           conn->tempsock[other] == CURL_SOCKET_BAD)
           /* the last attempt failed and no other sockets remain open */
           result = status;
       }
@@ -1099,8 +1100,8 @@ static CURLcode singleipconnect(struct connectdata *conn,
   if(conn->num_addr > 1)
     Curl_expire(data, conn->timeoutms_per_addr, EXPIRE_DNS_PER_NAME);
 
-  /* Connect TCP sockets, bind UDP */
-  if(!isconnected && (conn->socktype == SOCK_STREAM)) {
+  /* Connect TCP and QUIC sockets */
+  if(!isconnected && (conn->transport != TRNSPRT_UDP)) {
     if(conn->bits.tcp_fastopen) {
 #if defined(CONNECT_DATA_IDEMPOTENT) /* Darwin */
 #  if defined(HAVE_BUILTIN_AVAILABLE)
@@ -1151,6 +1152,15 @@ static CURLcode singleipconnect(struct connectdata *conn,
     *sockp = sockfd;
     return CURLE_OK;
   }
+
+#ifdef ENABLE_QUIC
+  if(!isconnected && (conn->transport == TRNSPRT_QUIC)) {
+    result = Curl_quic_connect(conn, sockfd, &addr.sa_addr, addr.addrlen);
+    if(result)
+      return result;
+    rc = 0; /* connect success */
+  }
+#endif
 
   if(-1 == rc) {
     switch(error) {
@@ -1386,8 +1396,9 @@ CURLcode Curl_socket(struct connectdata *conn,
    */
 
   addr->family = ai->ai_family;
-  addr->socktype = conn->socktype;
-  addr->protocol = conn->socktype == SOCK_DGRAM?IPPROTO_UDP:ai->ai_protocol;
+  addr->socktype = (conn->transport == TRNSPRT_TCP) ? SOCK_STREAM : SOCK_DGRAM;
+  addr->protocol = conn->transport != TRNSPRT_TCP ? IPPROTO_UDP :
+    ai->ai_protocol;
   addr->addrlen = ai->ai_addrlen;
 
   if(addr->addrlen > sizeof(struct Curl_sockaddr_storage))

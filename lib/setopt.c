@@ -2374,8 +2374,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
   case CURLOPT_REDIR_PROTOCOLS:
     /* set the bitmask for the protocols that libcurl is allowed to follow to,
        as a subset of the CURLOPT_PROTOCOLS ones. That means the protocol needs
-       to be set in both bitmasks to be allowed to get redirected to. Defaults
-       to all protocols except FILE and SCP. */
+       to be set in both bitmasks to be allowed to get redirected to. */
     data->set.redir_protocols = va_arg(param, long);
     break;
 
@@ -2745,6 +2744,14 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
       return result;
     break;
 #endif
+  case CURLOPT_H3:
+#ifdef ENABLE_QUIC
+    arg = va_arg(param, long);
+    data->set.h3opts = arg;
+#else
+    return CURLE_NOT_BUILT_IN;
+#endif
+    break;
   default:
     /* unknown tag and its companion, just ignore: */
     result = CURLE_UNKNOWN_OPTION;

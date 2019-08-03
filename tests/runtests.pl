@@ -2203,7 +2203,8 @@ sub rundictserver {
     $flags .= "--verbose 1 " if($debugprotocol);
     $flags .= "--pidfile \"$pidfile\" --logfile \"$logfile\" ";
     $flags .= "--id $idnum " if($idnum > 1);
-    $flags .= "--port $port --srcdir \"$srcdir\"";
+    $flags .= "--port $port --srcdir \"$srcdir\" ";
+    $flags .= "--host $HOSTIP";
 
     my $cmd = "$srcdir/dictserver.py $flags";
     my ($dictpid, $pid2) = startnew($cmd, $pidfile, 15, 0);
@@ -2279,7 +2280,8 @@ sub runsmbserver {
     $flags .= "--verbose 1 " if($debugprotocol);
     $flags .= "--pidfile \"$pidfile\" --logfile \"$logfile\" ";
     $flags .= "--id $idnum " if($idnum > 1);
-    $flags .= "--port $port --srcdir \"$srcdir\"";
+    $flags .= "--port $port --srcdir \"$srcdir\" ";
+    $flags .= "--host $HOSTIP";
 
     my $cmd = "$srcdir/smbserver.py $flags";
     my ($smbpid, $pid2) = startnew($cmd, $pidfile, 15, 0);
@@ -3202,6 +3204,9 @@ sub singletest {
     my $cmd;
     my $disablevalgrind;
 
+    # fist, remove all lingering log files
+    cleardir($LOGDIR);
+
     # copy test number to a global scope var, this allows
     # testnum checking when starting test harness servers.
     $testnumcheck = $testnum;
@@ -3862,9 +3867,6 @@ sub singletest {
 
     # Skip all the verification on torture tests
     if ($torture) {
-        if(!$cmdres && !$keepoutfiles) {
-            cleardir($LOGDIR);
-        }
         # timestamp test result verification end
         $timevrfyend{$testnum} = Time::HiRes::time();
         return $cmdres;
@@ -4295,10 +4297,6 @@ sub singletest {
         logmsg "PASS: $testnum - $testname\n";
     }
 
-    # the test succeeded, remove all log files
-    if(!$keepoutfiles) {
-        cleardir($LOGDIR);
-    }
 
     return 0;
 }

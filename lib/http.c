@@ -88,8 +88,7 @@
  */
 
 static int http_getsock_do(struct connectdata *conn,
-                           curl_socket_t *socks,
-                           int numsocks);
+                           curl_socket_t *socks);
 static int http_should_fail(struct connectdata *conn);
 
 #ifndef CURL_DISABLE_PROXY
@@ -99,8 +98,7 @@ static CURLcode add_haproxy_protocol_header(struct connectdata *conn);
 #ifdef USE_SSL
 static CURLcode https_connecting(struct connectdata *conn, bool *done);
 static int https_getsock(struct connectdata *conn,
-                         curl_socket_t *socks,
-                         int numsocks);
+                         curl_socket_t *socks);
 #else
 #define https_connecting(x,y) CURLE_COULDNT_CONNECT
 #endif
@@ -171,10 +169,22 @@ static CURLcode http_setup_conn(struct connectdata *conn)
   Curl_mime_initpart(&http->form, conn->data);
   data->req.protop = http;
 
-  if(!CONN_INUSE(conn))
-    /* if not already multi-using, setup connection details */
-    Curl_http2_setup_conn(conn);
-  Curl_http2_setup_req(data);
+  if(data->set.h3opts & CURLH3_DIRECT) {
+    if(conn->handler->flags & PROTOPT_SSL)
+      /* Only go h3-direct on HTTPS URLs. It needs a UDP socket and does the
+         QUIC dance. */
+      conn->transport = TRNSPRT_QUIC;
+    else {
+      failf(data, "HTTP/3 requested for non-HTTPS URL");
+      return CURLE_URL_MALFORMAT;
+    }
+  }
+  else {
+    if(!CONN_INUSE(conn))
+      /* if not already multi-using, setup connection details */
+      Curl_http2_setup_conn(conn);
+    Curl_http2_setup_req(data);
+  }
   return CURLE_OK;
 }
 
@@ -383,7 +393,7 @@ static bool pickoneauth(struct auth *pick, unsigned long mask)
 }
 
 /*
- * Curl_http_perhapsrewind()
+ * http_perhapsrewind()
  *
  * If we are doing POST or PUT {
  *   If we have more data to send {
@@ -1497,11 +1507,9 @@ CURLcode Curl_http_connect(struct connectdata *conn, bool *done)
    interface and then we're always _sending_ a request and thus we wait for
    the single socket to become writable only */
 static int http_getsock_do(struct connectdata *conn,
-                           curl_socket_t *socks,
-                           int numsocks)
+                           curl_socket_t *socks)
 {
   /* write mode */
-  (void)numsocks; /* unused, we trust it to be at least 1 */
   socks[0] = conn->sock[FIRSTSOCKET];
   return GETSOCK_WRITESOCK(0);
 }
@@ -1555,6 +1563,15 @@ static CURLcode https_connecting(struct connectdata *conn, bool *done)
   CURLcode result;
   DEBUGASSERT((conn) && (conn->handler->flags & PROTOPT_SSL));
 
+#ifdef ENABLE_QUIC
+  if(conn->transport == TRNSPRT_QUIC) {
+    result = Curl_quic_is_connected(conn, FIRSTSOCKET, done);
+    if(result)
+      connclose(conn, "Failed HTTPS connection (over QUIC)");
+    return result;
+  }
+#endif
+
   /* perform SSL initialization for this socket */
   result = Curl_ssl_connect_nonblocking(conn, FIRSTSOCKET, done);
   if(result)
@@ -1564,11 +1581,10 @@ static CURLcode https_connecting(struct connectdata *conn, bool *done)
 }
 
 static int https_getsock(struct connectdata *conn,
-                         curl_socket_t *socks,
-                         int numsocks)
+                         curl_socket_t *socks)
 {
   if(conn->handler->flags & PROTOPT_SSL)
-    return Curl_ssl_getsock(conn, socks, numsocks);
+    return Curl_ssl_getsock(conn, socks);
   return GETSOCK_BLANK;
 }
 #endif /* USE_SSL */
@@ -1881,9 +1897,10 @@ CURLcode Curl_add_custom_headers(struct connectdata *conn,
 }
 
 #ifndef CURL_DISABLE_PARSEDATE
-CURLcode Curl_add_timecondition(struct Curl_easy *data,
+CURLcode Curl_add_timecondition(const struct connectdata *conn,
                                 Curl_send_buffer *req_buffer)
 {
+  struct Curl_easy *data = conn->data;
   const struct tm *tm;
   struct tm keeptime;
   CURLcode result;
@@ -1916,6 +1933,11 @@ CURLcode Curl_add_timecondition(struct Curl_easy *data,
     break;
   }
 
+  if(Curl_checkheaders(conn, condp)) {
+    /* A custom header was specified; it will be sent instead. */
+    return CURLE_OK;
+  }
+
   /* The If-Modified-Since header family should have their times set in
    * GMT as RFC2616 defines: "All HTTP date/time stamps MUST be
    * represented in Greenwich Mean Time (GMT), without exception. For the
@@ -1941,10 +1963,10 @@ CURLcode Curl_add_timecondition(struct Curl_easy *data,
 }
 #else
 /* disabled */
-CURLcode Curl_add_timecondition(struct Curl_easy *data,
+CURLcode Curl_add_timecondition(const struct connectdata *conn,
                                 Curl_send_buffer *req_buffer)
 {
-  (void)data;
+  (void)conn;
   (void)req_buffer;
   return CURLE_OK;
 }
@@ -2220,8 +2242,9 @@ CURLcode Curl_http(struct connectdata *conn, bool *done)
   else {
     if((conn->handler->protocol & PROTO_FAMILY_HTTP) &&
        (((httpreq == HTTPREQ_POST_MIME || httpreq == HTTPREQ_POST_FORM) &&
-       http->postsize < 0) ||
-       (data->set.upload && data->state.infilesize == -1))) {
+         http->postsize < 0) ||
+        ((data->set.upload || httpreq == HTTPREQ_POST) &&
+         data->state.infilesize == -1))) {
       if(conn->bits.authneg)
         /* don't enable chunked during auth neg */
         ;
@@ -2683,7 +2706,7 @@ CURLcode Curl_http(struct connectdata *conn, bool *done)
   }
 #endif
 
-  result = Curl_add_timecondition(data, req_buffer);
+  result = Curl_add_timecondition(conn, req_buffer);
   if(result)
     return result;
 
@@ -3147,6 +3170,9 @@ static CURLcode header_append(struct Curl_easy *data,
                               struct SingleRequest *k,
                               size_t length)
 {
+  /* length is at most the size of a full read buffer, for which the upper
+     bound is CURL_MAX_READ_SIZE. There is thus no chance of overflow in this
+     calculation. */
   size_t newsize = k->hbuflen + length;
   if(newsize > CURL_MAX_HTTP_HEADER) {
     /* The reason to have a max limit for this is to avoid the risk of a bad
@@ -3511,8 +3537,10 @@ CURLcode Curl_http_readwrite_headers(struct Curl_easy *data,
               else {
                 infof(data, "HTTP error before end of send, stop sending\n");
                 streamclose(conn, "Stop sending data before everything sent");
+                result = Curl_done_sending(conn, k);
+                if(result)
+                  return result;
                 k->upload_done = TRUE;
-                k->keepon &= ~KEEP_SEND; /* don't send */
                 if(data->state.expect100header)
                   k->exp100 = EXP100_FAILED;
               }

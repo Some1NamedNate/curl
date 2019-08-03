@@ -363,6 +363,8 @@ struct Curl_multi *Curl_multi_handle(int hashsize, /* socket hash */
   Curl_llist_init(&multi->msglist, NULL);
   Curl_llist_init(&multi->pending, NULL);
 
+  multi->multiplexing = CURLPIPE_MULTIPLEX;
+
   /* -1 means it not set by user, use the default value */
   multi->maxconnects = -1;
   return multi;
@@ -816,19 +818,15 @@ void Curl_attach_connnection(struct Curl_easy *data,
 }
 
 static int waitconnect_getsock(struct connectdata *conn,
-                               curl_socket_t *sock,
-                               int numsocks)
+                               curl_socket_t *sock)
 {
   int i;
   int s = 0;
   int rc = 0;
 
-  if(!numsocks)
-    return GETSOCK_BLANK;
-
 #ifdef USE_SSL
   if(CONNECT_FIRSTSOCKET_PROXY_SSL())
-    return Curl_ssl_getsock(conn, sock, numsocks);
+    return Curl_ssl_getsock(conn, sock);
 #endif
 
   for(i = 0; i<2; i++) {
@@ -842,12 +840,8 @@ static int waitconnect_getsock(struct connectdata *conn,
 }
 
 static int waitproxyconnect_getsock(struct connectdata *conn,
-                                    curl_socket_t *sock,
-                                    int numsocks)
+                                    curl_socket_t *sock)
 {
-  if(!numsocks)
-    return GETSOCK_BLANK;
-
   sock[0] = conn->sock[FIRSTSOCKET];
 
   /* when we've sent a CONNECT to a proxy, we should rather wait for the
@@ -859,19 +853,17 @@ static int waitproxyconnect_getsock(struct connectdata *conn,
 }
 
 static int domore_getsock(struct connectdata *conn,
-                          curl_socket_t *socks,
-                          int numsocks)
+                          curl_socket_t *socks)
 {
   if(conn && conn->handler->domore_getsock)
-    return conn->handler->domore_getsock(conn, socks, numsocks);
+    return conn->handler->domore_getsock(conn, socks);
   return GETSOCK_BLANK;
 }
 
-/* returns bitmapped flags for this handle and its sockets */
+/* returns bitmapped flags for this handle and its sockets. The 'socks[]'
+   array contains MAX_SOCKSPEREASYHANDLE entries. */
 static int multi_getsock(struct Curl_easy *data,
-                         curl_socket_t *socks, /* points to numsocks number
-                                                  of sockets */
-                         int numsocks)
+                         curl_socket_t *socks)
 {
   /* The no connection case can happen when this is called from
      curl_multi_remove_handle() => singlesocket() => multi_getsock().
@@ -903,30 +895,30 @@ static int multi_getsock(struct Curl_easy *data,
     return 0;
 
   case CURLM_STATE_WAITRESOLVE:
-    return Curl_resolv_getsock(data->conn, socks, numsocks);
+    return Curl_resolv_getsock(data->conn, socks);
 
   case CURLM_STATE_PROTOCONNECT:
   case CURLM_STATE_SENDPROTOCONNECT:
-    return Curl_protocol_getsock(data->conn, socks, numsocks);
+    return Curl_protocol_getsock(data->conn, socks);
 
   case CURLM_STATE_DO:
   case CURLM_STATE_DOING:
-    return Curl_doing_getsock(data->conn, socks, numsocks);
+    return Curl_doing_getsock(data->conn, socks);
 
   case CURLM_STATE_WAITPROXYCONNECT:
-    return waitproxyconnect_getsock(data->conn, socks, numsocks);
+    return waitproxyconnect_getsock(data->conn, socks);
 
   case CURLM_STATE_WAITCONNECT:
-    return waitconnect_getsock(data->conn, socks, numsocks);
+    return waitconnect_getsock(data->conn, socks);
 
   case CURLM_STATE_DO_MORE:
-    return domore_getsock(data->conn, socks, numsocks);
+    return domore_getsock(data->conn, socks);
 
   case CURLM_STATE_DO_DONE: /* since is set after DO is completed, we switch
                                to waiting for the same as the *PERFORM
                                states */
   case CURLM_STATE_PERFORM:
-    return Curl_single_getsock(data->conn, socks, numsocks);
+    return Curl_single_getsock(data->conn, socks);
   }
 
 }
@@ -952,7 +944,7 @@ CURLMcode curl_multi_fdset(struct Curl_multi *multi,
 
   data = multi->easyp;
   while(data) {
-    int bitmap = multi_getsock(data, sockbunch, MAX_SOCKSPEREASYHANDLE);
+    int bitmap = multi_getsock(data, sockbunch);
 
     for(i = 0; i< MAX_SOCKSPEREASYHANDLE; i++) {
       curl_socket_t s = CURL_SOCKET_BAD;
@@ -1013,7 +1005,7 @@ CURLMcode Curl_multi_wait(struct Curl_multi *multi,
   /* Count up how many fds we have from the multi handle */
   data = multi->easyp;
   while(data) {
-    bitmap = multi_getsock(data, sockbunch, MAX_SOCKSPEREASYHANDLE);
+    bitmap = multi_getsock(data, sockbunch);
 
     for(i = 0; i< MAX_SOCKSPEREASYHANDLE; i++) {
       curl_socket_t s = CURL_SOCKET_BAD;
@@ -1063,7 +1055,7 @@ CURLMcode Curl_multi_wait(struct Curl_multi *multi,
     /* Add the curl handles to our pollfds first */
     data = multi->easyp;
     while(data) {
-      bitmap = multi_getsock(data, sockbunch, MAX_SOCKSPEREASYHANDLE);
+      bitmap = multi_getsock(data, sockbunch);
 
       for(i = 0; i< MAX_SOCKSPEREASYHANDLE; i++) {
         curl_socket_t s = CURL_SOCKET_BAD;
@@ -2010,13 +2002,15 @@ static CURLMcode multi_runsingle(struct Curl_multi *multi,
           if(stream_error) {
             /* Don't attempt to send data over a connection that timed out */
             bool dead_connection = result == CURLE_OPERATION_TIMEDOUT;
-            /* disconnect properly */
-            Curl_disconnect(data, data->conn, dead_connection);
+            struct connectdata *conn = data->conn;
 
             /* This is where we make sure that the conn pointer is reset.
                We don't have to do this in every case block above where a
                failure is detected */
             detach_connnection(data);
+
+            /* disconnect properly */
+            Curl_disconnect(data, conn, dead_connection);
           }
         }
         else if(data->mstate == CURLM_STATE_CONNECT) {
@@ -2232,7 +2226,7 @@ static CURLMcode singlesocket(struct Curl_multi *multi,
 
   /* Fill in the 'current' struct with the state as it is now: what sockets to
      supervise and for what actions */
-  curraction = multi_getsock(data, socks, MAX_SOCKSPEREASYHANDLE);
+  curraction = multi_getsock(data, socks);
 
   /* We have 0 .. N sockets already and we get to know about the 0 .. M
      sockets we should have from now on. Detect the differences, remove no
@@ -2844,7 +2838,7 @@ multi_addtimeout(struct Curl_easy *data,
  *
  * Expire replaces a former timeout using the same id if already set.
  */
-void Curl_expire(struct Curl_easy *data, time_t milli, expire_id id)
+void Curl_expire(struct Curl_easy *data, timediff_t milli, expire_id id)
 {
   struct Curl_multi *multi = data->multi;
   struct curltime *nowp = &data->state.expiretime;
@@ -2858,7 +2852,7 @@ void Curl_expire(struct Curl_easy *data, time_t milli, expire_id id)
   DEBUGASSERT(id < EXPIRE_LAST);
 
   set = Curl_now();
-  set.tv_sec += milli/1000;
+  set.tv_sec += (time_t)(milli/1000); /* might be a 64 to 32 bit conversion */
   set.tv_usec += (unsigned int)(milli%1000)*1000;
 
   if(set.tv_usec >= 1000000) {

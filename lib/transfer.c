@@ -225,7 +225,7 @@ CURLcode Curl_fillreadbuffer(struct connectdata *conn, size_t bytes,
   if(data->state.trailers_state == TRAILERS_SENDING) {
     /* if we're here then that means that we already sent the last empty chunk
        but we didn't send a final CR LF, so we sent 0 CR LF. We then start
-       pulling trailing data until we ²have no more at which point we
+       pulling trailing data until we have no more at which point we
        simply return to the previous point in the state machine as if
        nothing happened.
        */
@@ -601,7 +601,7 @@ static CURLcode readwrite_data(struct Curl_easy *data,
       nread = 0;
     }
 
-    if((k->bytecount == 0) && (k->writebytecount == 0)) {
+    if(!k->bytecount) {
       Curl_pgrsTime(data, TIMER_STARTTRANSFER);
       if(k->exp100 > EXP100_SEND_DATA)
         /* set time stamp to compare with when waiting for the 100 */
@@ -937,8 +937,8 @@ static CURLcode readwrite_data(struct Curl_easy *data,
   return CURLE_OK;
 }
 
-static CURLcode done_sending(struct connectdata *conn,
-                             struct SingleRequest *k)
+CURLcode Curl_done_sending(struct connectdata *conn,
+                           struct SingleRequest *k)
 {
   k->keepon &= ~KEEP_SEND; /* we're done writing */
 
@@ -1046,7 +1046,7 @@ static CURLcode readwrite_upload(struct Curl_easy *data,
         break;
       }
       if(nread <= 0) {
-        result = done_sending(conn, k);
+        result = Curl_done_sending(conn, k);
         if(result)
           return result;
         break;
@@ -1164,7 +1164,7 @@ static CURLcode readwrite_upload(struct Curl_easy *data,
       k->upload_present = 0; /* no more bytes left */
 
       if(k->upload_done) {
-        result = done_sending(conn, k);
+        result = Curl_done_sending(conn, k);
         if(result)
           return result;
       }
@@ -1354,20 +1354,14 @@ CURLcode Curl_readwrite(struct connectdata *conn,
  * in the proper state to have this information available.
  */
 int Curl_single_getsock(const struct connectdata *conn,
-                        curl_socket_t *sock, /* points to numsocks number
-                                                of sockets */
-                        int numsocks)
+                        curl_socket_t *sock)
 {
   const struct Curl_easy *data = conn->data;
   int bitmap = GETSOCK_BLANK;
   unsigned sockindex = 0;
 
   if(conn->handler->perform_getsock)
-    return conn->handler->perform_getsock(conn, sock, numsocks);
-
-  if(numsocks < 2)
-    /* simple check but we might need two slots */
-    return GETSOCK_BLANK;
+    return conn->handler->perform_getsock(conn, sock);
 
   /* don't include HOLD and PAUSE connections */
   if((data->req.keepon & KEEP_RECVBITS) == KEEP_RECV) {

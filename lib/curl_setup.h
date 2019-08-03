@@ -96,6 +96,10 @@
 #  include "config-vxworks.h"
 #endif
 
+#ifdef __PLAN9__
+#  include "config-plan9.h"
+#endif
+
 #endif /* HAVE_CONFIG_H */
 
 /* ================================================================ */
@@ -825,6 +829,10 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf,
 #define UNITTEST
 #else
 #define UNITTEST static
+#endif
+
+#if defined(USE_NGTCP2) || defined(USE_QUICHE)
+#define ENABLE_QUIC
 #endif
 
 #endif /* HEADER_CURL_SETUP_H */

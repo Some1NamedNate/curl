@@ -129,6 +129,7 @@ typedef ssize_t (Curl_recv)(struct connectdata *conn, /* connection data */
 #include "smb.h"
 #include "wildcard.h"
 #include "multihandle.h"
+#include "quic.h"
 
 #ifdef HAVE_GSSAPI
 # ifdef HAVE_GSSGNU
@@ -663,27 +664,23 @@ struct Curl_handler {
   /* Called from the multi interface during the PROTOCONNECT phase, and it
      should then return a proper fd set */
   int (*proto_getsock)(struct connectdata *conn,
-                       curl_socket_t *socks,
-                       int numsocks);
+                       curl_socket_t *socks);
 
   /* Called from the multi interface during the DOING phase, and it should
      then return a proper fd set */
   int (*doing_getsock)(struct connectdata *conn,
-                       curl_socket_t *socks,
-                       int numsocks);
+                       curl_socket_t *socks);
 
   /* Called from the multi interface during the DO_MORE phase, and it should
      then return a proper fd set */
   int (*domore_getsock)(struct connectdata *conn,
-                        curl_socket_t *socks,
-                        int numsocks);
+                        curl_socket_t *socks);
 
   /* Called from the multi interface during the DO_DONE, PERFORM and
      WAITPERFORM phases, and it should then return a proper fd set. Not setting
      this will make libcurl use the generic default one. */
   int (*perform_getsock)(const struct connectdata *conn,
-                         curl_socket_t *socks,
-                         int numsocks);
+                         curl_socket_t *socks);
 
   /* This function *MAY* be set to a protocol-dependent function that is run
    * by the curl_disconnect(), as a step in the disconnection.  If the handler
@@ -831,7 +828,15 @@ struct connectdata {
 
   unsigned int scope_id;  /* Scope id for IPv6 */
 
-  int socktype;  /* SOCK_STREAM or SOCK_DGRAM */
+  enum {
+    TRNSPRT_TCP = 3,
+    TRNSPRT_UDP = 4,
+    TRNSPRT_QUIC = 5
+  } transport;
+
+#ifdef ENABLE_QUIC
+  struct quicsocket quic;
+#endif
 
   struct hostname host;
   char *hostname_resolve; /* host name to resolve to address, allocated */
@@ -904,8 +909,8 @@ struct connectdata {
   struct curltime connecttime;
   /* The two fields below get set in Curl_connecthost */
   int num_addr; /* number of addresses to try to connect to */
-  time_t timeoutms_per_addr; /* how long time in milliseconds to spend on
-                                trying to connect to each IP address */
+  timediff_t timeoutms_per_addr; /* how long time in milliseconds to spend on
+                                    trying to connect to each IP address */
 
   const struct Curl_handler *handler; /* Connection's protocol handler */
   const struct Curl_handler *given;   /* The protocol first given */
@@ -1103,17 +1108,17 @@ struct Progress {
   int width; /* screen width at download start */
   int flags; /* see progress.h */
 
-  time_t timespent;
+  timediff_t timespent;
 
   curl_off_t dlspeed;
   curl_off_t ulspeed;
 
-  time_t t_nslookup;
-  time_t t_connect;
-  time_t t_appconnect;
-  time_t t_pretransfer;
-  time_t t_starttransfer;
-  time_t t_redirect;
+  timediff_t t_nslookup;
+  timediff_t t_connect;
+  timediff_t t_appconnect;
+  timediff_t t_pretransfer;
+  timediff_t t_starttransfer;
+  timediff_t t_redirect;
 
   struct curltime start;
   struct curltime t_startsingle;
@@ -1672,6 +1677,7 @@ struct UserDefined {
   CURLU *uh; /* URL handle for the current parsed URL */
   void *trailer_data; /* pointer to pass to trailer data callback */
   curl_trailer_callback trailer_callback; /* trailing data callback */
+  long h3opts; /* the CURLOPT_H3 bitmask */
   bit is_fread_set:1; /* has read callback been set to non-NULL? */
   bit is_fwrite_set:1; /* has write callback been set to non-NULL? */
   bit free_referer:1; /* set TRUE if 'referer' points to a string we
